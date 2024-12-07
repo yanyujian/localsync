@@ -9,7 +9,6 @@ folder_groups:
   - D:/test_sync/media/backup
   source_code:
   - D:/test_sync/code/dev
-  - D:/test_sync/code/test
   - D:/test_sync/code/backup
   自立:
   - D:/test/common1

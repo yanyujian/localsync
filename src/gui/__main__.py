@@ -5,7 +5,6 @@ from .main_window import SyncConfigWindow
 def main():
     app = QApplication(sys.argv)
     window = SyncConfigWindow()
-    window.show()
     sys.exit(app.exec_())
 
 if __name__ == "__main__":

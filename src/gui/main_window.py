@@ -21,6 +21,7 @@ class SyncThread(QThread):
         self.config_data = config_data
         self._is_running = True
         self._loop = None
+        self._current_task = None
 
     def run(self):
         try:
@@ -31,38 +32,80 @@ class SyncThread(QThread):
             self._loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self._loop)
             
-            def stop_callback():
-                for task in asyncio.all_tasks(self._loop):
-                    task.cancel()
-            
             while self._is_running:
                 try:
-                    # 创建新的任务
-                    future = asyncio.ensure_future(main(), loop=self._loop)
-                    self._loop.run_until_complete(future)
+                    # 创建并保存当前任务的引用
+                    self._current_task = self._loop.create_task(main())
+                    
+                    # 等待任务完成或被取消
+                    try:
+                        self._loop.run_until_complete(self._current_task)
+                    except asyncio.CancelledError:
+                        logger.info("Sync task was cancelled")
+                        break
+                    
+                    # 如果已经请求停止，则退出循环
+                    if not self._is_running:
+                        break
                     
                     # 添加短暂延迟
-                    self._loop.run_until_complete(asyncio.sleep(0.1))
-                except asyncio.CancelledError:
-                    break
+                    try:
+                        self._loop.run_until_complete(asyncio.sleep(0.1))
+                    except asyncio.CancelledError:
+                        break
+                        
                 except Exception as e:
                     self.error_occurred.emit(str(e))
+                    logger.error(f"Error in sync task: {str(e)}")
                     break
             
         except Exception as e:
             self.error_occurred.emit(str(e))
+            logger.error(f"Error in sync thread: {str(e)}")
         finally:
+            self._cleanup()
+
+    def _cleanup(self):
+        """清理资源"""
+        try:
+            if self._current_task and not self._current_task.done():
+                self._current_task.cancel()
+                
             if self._loop and self._loop.is_running():
-                stop_callback()
+                # 取消所有待处理的任务
+                for task in asyncio.all_tasks(self._loop):
+                    task.cancel()
+                    try:
+                        self._loop.run_until_complete(task)
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                        
             if self._loop:
-                self._loop.close()
+                try:
+                    # 运行一次事件循环以确保所有任务都被清理
+                    self._loop.run_until_complete(asyncio.sleep(0))
+                except Exception:
+                    pass
+                finally:
+                    self._loop.close()
+                    self._loop = None
+                    
+        except Exception as e:
+            logger.error(f"Error during cleanup: {str(e)}")
+        finally:
             self.status_changed.emit(i18n.get('sync_stopped'))
 
     def stop(self):
         """停止同步进程"""
         self._is_running = False
-        if self._loop and self._loop.is_running():
-            self._loop.call_soon_threadsafe(self._loop.stop)
+        try:
+            if self._current_task and not self._current_task.done():
+                self._current_task.cancel()
+                
+            if self._loop and self._loop.is_running():
+                self._loop.call_soon_threadsafe(self._loop.stop)
+        except Exception as e:
+            logger.error(f"Error stopping sync thread: {str(e)}")
 
 class SyncConfigWindow(QMainWindow):
     def __init__(self):
@@ -141,18 +184,18 @@ class SyncConfigWindow(QMainWindow):
     def save_config(self):
         """保存配置到文件并重启同步"""
         try:
-            # 先保存配置
-            with open('config.yaml', 'w', encoding='utf-8') as f:
-                yaml.safe_dump(self.config_data, f, allow_unicode=True)
-            
-            # 停止当前同步
+            # 先停止当前同步
             if self.sync_thread and self.sync_thread.isRunning():
                 self.stop_sync()
                 # 等待确保完全停止
-                QThread.msleep(1000)  # 增加等待时间到1秒
+                QThread.msleep(2000)  # 增加等待时间到2秒
             
-            # 启动新的同步
-            QThread.msleep(100)  # 添加短暂延迟
+            # 保存配置
+            with open('config.yaml', 'w', encoding='utf-8') as f:
+                yaml.safe_dump(self.config_data, f, allow_unicode=True)
+            
+            # 等待一段时间后启动新的同步
+            QThread.msleep(500)
             self.start_sync(show_message=True)
             
             QMessageBox.information(self, i18n.get('success'), i18n.get('config_saved'))
@@ -171,9 +214,12 @@ class SyncConfigWindow(QMainWindow):
             self.sync_thread = SyncThread(self.config_data)
             self.sync_thread.error_occurred.connect(self.handle_sync_error)
             self.sync_thread.status_changed.connect(self.update_sync_status)
-            self.start_btn.setEnabled(False)
+            
+            # 更新按钮状态
+            self.sync_btn.setText(i18n.get('stop_sync'))
             self.start_sync_action.setVisible(False)
             self.stop_sync_action.setVisible(True)
+            
             self.sync_thread.start()
             
             if show_message:
@@ -193,9 +239,12 @@ class SyncConfigWindow(QMainWindow):
                 logger.warning("Sync thread did not stop gracefully")
                 self.sync_thread.terminate()  # 强制终止
                 self.sync_thread.wait()
-            self.start_btn.setEnabled(True)
+            
+            # 更新按钮状态
+            self.sync_btn.setText(i18n.get('start_sync'))
             self.start_sync_action.setVisible(True)
             self.stop_sync_action.setVisible(False)
+            
             self.update_sync_status(i18n.get('sync_stopped'))
 
     def update_sync_status(self, status: str):
@@ -218,9 +267,10 @@ class SyncConfigWindow(QMainWindow):
 
     def handle_sync_error(self, error_msg):
         """处理同步错误"""
-        QMessageBox.warning(self, i18n.get('error'), 
-                          f"{i18n.get('failed_sync')}: {error_msg}")
-        self.start_btn.setEnabled(True)
+        # 只记录日志，不显示错误对话框
+        logger.error(f"Sync error occurred: {error_msg}")
+        # 更新按钮状态
+        self.sync_btn.setText(i18n.get('start_sync'))
 
     def init_ui(self):
         central_widget = QWidget()
@@ -254,10 +304,10 @@ class SyncConfigWindow(QMainWindow):
         # 保存和启动按钮
         action_layout = QHBoxLayout()
         self.save_btn = QPushButton(i18n.get('save_config'))
-        self.start_btn = QPushButton(i18n.get('start_sync'))
+        self.sync_btn = QPushButton(i18n.get('start_sync'))
         
         action_layout.addWidget(self.save_btn)
-        action_layout.addWidget(self.start_btn)
+        action_layout.addWidget(self.sync_btn)
         
         details_layout.addLayout(action_layout)
         layout.addLayout(details_layout)
@@ -267,7 +317,7 @@ class SyncConfigWindow(QMainWindow):
         self.add_folder_btn.clicked.connect(self.add_folder)
         self.remove_btn.clicked.connect(self.remove_item)
         self.save_btn.clicked.connect(self.save_config)
-        self.start_btn.clicked.connect(self.start_sync)
+        self.sync_btn.clicked.connect(self.toggle_sync)
         self.tree.itemSelectionChanged.connect(self.update_details)
 
     def load_config(self):
@@ -365,3 +415,10 @@ class SyncConfigWindow(QMainWindow):
         else:  # 文件夹节点
             folder_path = item.text(0)
             self.details_label.setText(i18n.get('folder_info', folder_path))
+
+    def toggle_sync(self):
+        """切换同步状态"""
+        if self.sync_thread and self.sync_thread.isRunning():
+            self.stop_sync()
+        else:
+            self.start_sync()
