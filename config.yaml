@@ -1,0 +1,5 @@
+# 单组同步示例
+folders:
+  - "D:/test_sync/folder1"
+  - "D:/test_sync/folder2"
+  - "D:/test_sync/folder3"
