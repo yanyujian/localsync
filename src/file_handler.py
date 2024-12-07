@@ -80,6 +80,24 @@ def should_sync_files(src_path: Path, target_path: Path) -> bool:
     # If hashes are same, files are identical - no need to sync
     return False
 
+def get_delete_filename(path: Path) -> Path:
+    """Generate a backup filename for deleted files."""
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    return path.parent / f"{path.name}.deleted.at{timestamp}"
+
+def safe_delete(path: Path) -> None:
+    """Safely 'delete' a file by renaming it with a timestamp."""
+    if not path.exists():
+        return
+        
+    try:
+        new_path = get_delete_filename(path)
+        path.rename(new_path)
+        logger.info(f"Safely deleted {path} -> {new_path}")
+    except Exception as e:
+        logger.error(f"Failed to safely delete {path}: {str(e)}")
+        raise
+
 def sync_file_operation(
     src_path: Path,
     folders: List[Path],
@@ -136,9 +154,11 @@ def sync_file_operation(
                         return
                         
                     if target_path.is_file():
-                        target_path.unlink()
+                        # Instead of deleting, rename with timestamp
+                        safe_delete(target_path)
                     elif target_path.is_dir():
-                        shutil.rmtree(target_path)
+                        # For directories, rename the entire directory
+                        safe_delete(target_path)
                         
             logger.info(f"{operation.capitalize()}: {target_path}")
             
