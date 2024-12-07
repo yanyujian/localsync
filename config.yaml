@@ -1,5 +1,25 @@
-# 单组同步示例
+# 默认同步组
 folders:
   - "D:/test_sync/folder1"
   - "D:/test_sync/folder2"
   - "D:/test_sync/folder3"
+
+# 多组同步配置
+folder_groups:
+  # 文档同步组
+  documents:
+    - "D:/test_sync/docs/work"      # 工作文档
+    - "D:/test_sync/docs/backup"    # 备份
+    - "D:/test_sync/docs/archive"   # 归档
+  
+  # 代码同步组
+  source_code:
+    - "D:/test_sync/code/dev"       # 开发目录
+    - "D:/test_sync/code/test"      # 测试目录
+    - "D:/test_sync/code/backup"    # 备份目录
+  
+  # 媒体文件同步组
+  media:
+    - "D:/test_sync/media/photos"   # 照片目录
+    - "D:/test_sync/media/process"  # 处理后的文件
+    - "D:/test_sync/media/backup"   # 备份目录
